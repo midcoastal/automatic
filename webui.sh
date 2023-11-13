@@ -10,6 +10,16 @@ cd -- "$(dirname -- "$0")"
 can_run_as_root=0
 export ERROR_REPORTING=FALSE
 export PIP_IGNORE_INSTALLED=0
+export SD_EN_SUBDIR_ONE=TRUE
+#export SD_EN_DEBUG=TRUE
+#export SD_TI_DEBUG=TRUE
+#export SD_UI_DEBUG=TRUE
+#export SD_ENPTI_DEBUG=TRUE
+#export SD_LORA_DEBUG=TRUE
+#export SD_ENPCP_DEBUG=TRUE
+#export SD_SCRIPTS_DEBUG=TRUE
+#export SD_MODELS_DEBUG=TRUE
+
 
 # Read variables from webui-user.sh
 if [[ -f webui-user.sh ]]

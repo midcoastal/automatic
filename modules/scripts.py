@@ -7,6 +7,8 @@ import gradio as gr
 from modules import paths, script_callbacks, extensions, script_loading, scripts_postprocessing, errors, timer
 from installer import log
 
+debug = log.env('SD_SCRIPTS_DEBUG').prefix(f'[{__name__}]')
+
 
 AlwaysVisible = object()
 time_component = {}

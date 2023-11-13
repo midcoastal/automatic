@@ -15,7 +15,7 @@ from collections import OrderedDict
 import gradio as gr
 from PIL import Image
 from starlette.responses import FileResponse, JSONResponse
-from modules import shared, scripts, modelloader
+from modules import shared, scripts, modelloader, timer
 from modules.ui_components import ToolButton
 import modules.ui_symbols as symbols
 
@@ -23,11 +23,15 @@ allowed_dirs = []
 dir_cache = {} # key=path, value=(mtime, listdir(path))
 refresh_time = 0
 extra_pages = shared.extra_networks
-debug = shared.log.info if os.environ.get('SD_EN_DEBUG', None) is not None else lambda *args, **kwargs: None
+debug = shared.log.env('SD_EN_DEBUG').prefix(f'[{__name__}]')
 
 
 def listdir(path):
-    debug(f'EN list-dir: {path}')
+    #debug(f'list-dir: {path}')
+    return modelloader.directory_files(path)
+
+def __listdir(path):
+    debug(f'list-dir: {path}')
     if not os.path.exists(path):
         return []
     if path in dir_cache and os.path.getmtime(path) == dir_cache[path][0]:
@@ -39,7 +43,7 @@ def listdir(path):
 
 def register_page(page):
     # registers extra networks page for the UI; recommend doing it in on_before_ui() callback for extensions
-    debug(f'EN register-page: {page}')
+    debug(f'register-page: {page}')
     shared.extra_networks.append(page)
     allowed_dirs.clear()
     for pg in shared.extra_networks:
@@ -68,7 +72,7 @@ def init_api(app):
         metadata = page.metadata.get(item, 'none')
         if metadata is None:
             metadata = ''
-        # shared.log.debug(f"Extra networks metadata: page='{page}' item={item} len={len(metadata)}")
+        # debug(f"Extra networks metadata: page='{page}' item={item} len={len(metadata)}")
         return JSONResponse({"metadata": metadata})
 
     def get_info(page: str = "", item: str = ""):
@@ -81,7 +85,7 @@ def init_api(app):
         info = page.find_info(item['filename'])
         if info is None:
             info = {}
-        # shared.log.debug(f"Extra networks info: page='{page.name}' item={item['name']} len={len(info)}")
+        # debug(f"Extra networks info: page='{page.name}' item={item['name']} len={len(info)}")
         return JSONResponse({"info": info})
 
     def get_desc(page: str = "", item: str = ""):
@@ -94,7 +98,7 @@ def init_api(app):
         desc = page.find_description(item['filename'])
         if desc is None:
             desc = ''
-        # shared.log.debug(f"Extra networks desc: page='{page.name}' item={item['name']} len={len(desc)}")
+        # debug(f"Extra networks desc: page='{page.name}' item={item['name']} len={len(desc)}")
         return JSONResponse({"description": desc})
 
     app.add_api_route("/sd_extra_networks/thumb", fetch_file, methods=["GET"])
@@ -116,6 +120,9 @@ class ExtraNetworksPage:
         self.refresh_time = 0
         self.page_time = 0
         self.list_time = 0
+        self.missing_preview_file='html/card-no-preview.png'
+        self.empty_thresh = 1 if os.environ.get(f'SD_EN_SUBDIR_ONE', None) else 0
+        self.empty_search_extensions = ['.ckpt', '.safetensors', '.pt', '.json']
         # class additional is to keep old extensions happy
         self.card = '''
             <div class='card' onclick={card_click} title='{name}' data-tab='{tabname}' data-page='{page}' data-name='{name}' data-filename='{filename}' data-tags='{tags}'>
@@ -161,14 +168,11 @@ class ExtraNetworksPage:
         return filename.replace('\\', '/')
 
     def is_empty(self, folder):
-        for f in listdir(folder):
-            _fn, ext = os.path.splitext(f)
-            if ext.lower() in ['.ckpt', '.safetensors', '.pt', '.json'] or os.path.isdir(os.path.join(folder, f)):
-                return False
-        return True
+        return len(modelloader.list_files(folder, ext_filter=self.empty_search_extensions)) <= self.empty_thresh
+        return any([f for f in listdir(folder) if os.path.splitext(f)[-1].lower() in ['.ckpt', '.safetensors', '.pt', '.json'] or os.path.isdir(f)])
 
     def create_thumb(self):
-        debug(f'EN create-thumb: {self.name}')
+        debug(f'create-thumb: {self.name}')
         created = 0
         for f in self.missing_thumbs:
             if not os.path.exists(f):
@@ -201,41 +205,49 @@ class ExtraNetworksPage:
             self.missing_thumbs.clear()
 
     def create_items(self, tabname):
-        debug(f'EN create-items: {self.name}')
+        ci_debug=debug.prefix(f'create-items.{self.name}: ')
+        ci_debug(f'begin {tabname}')
         if self.refresh_time is not None and self.refresh_time > refresh_time: # cached results
             return
-        t0 = time.time()
+        t0 = _time = time.time()
         try:
+            ci_debug(f'list.begin')
             self.items = list(self.list_items())
-            self.refresh_time = time.time()
+            self.refresh_time = _time = time.time()
+            ci_debug(f'list.end {round(_time-t0,2)}')
         except Exception as e:
             self.items = []
             shared.log.error(f'Extra networks error listing items: class={self.__class__.__name__} tab={tabname} {e}')
+        ci_debug(f'meta.begin {len(self.items)} items')
         for item in self.items:
+            ci_debug(f'meta.item {item.get("name", "")}')
             self.metadata[item["name"]] = item.get("metadata", {})
         t1 = time.time()
+        ci_debug(f'meta.end {round(t1-_time,2)}')
         self.list_time = round(t1-t0, 2)
+        ci_debug(f'end ({self.list_time})')
 
 
     def create_page(self, tabname, skip = False):
-        debug(f'EN create-page: {self.name}')
+        debug(f'create-page: {self.name}')
         if self.page_time > refresh_time: # cached page
             return self.html
         self_name_id = self.name.replace(" ", "_")
         if skip:
             return f"<div id='{tabname}_{self_name_id}_subdirs' class='extra-network-subdirs'></div><div id='{tabname}_{self_name_id}_cards' class='extra-network-cards'>Extra network page not ready<br>Click refresh to try again</div>"
+        _timer=timer.Timer()
         subdirs = {}
-        allowed_folders = [os.path.abspath(x) for x in self.allowed_directories_for_previews()]
+        allowed_folders = modelloader.unique_directories(self.allowed_directories_for_previews(), recursive=True)
         for parentdir, dirs in {d: modelloader.directory_directories(d) for d in allowed_folders}.items():
             for tgt in dirs.keys():
                 if shared.opts.diffusers_dir in tgt:
                     subdirs[os.path.basename(shared.opts.diffusers_dir)] = 1
                 if 'models--' in tgt:
                     continue
-                subdir = tgt[len(parentdir):].replace("\\", "/")
-                while subdir.startswith("/"):
-                    subdir = subdir[1:]
-                if not self.is_empty(tgt):
+                if tgt != parentdir and not self.is_empty(tgt):
+                    subdir = tgt[len(parentdir):].replace("\\", "/")
+                    while subdir.startswith("/"):
+                        subdir = subdir[1:]
                     subdirs[subdir] = 1
         subdirs = OrderedDict(sorted(subdirs.items()))
         if self.name == 'style' and shared.opts.extra_networks_styles:
@@ -243,18 +255,22 @@ class ExtraNetworksPage:
         subdirs_html = "<button class='lg secondary gradio-button custom-button search-all' onclick='extraNetworksSearchButton(event)'>all</button><br>"
         subdirs_html += "".join([f"<button class='lg secondary gradio-button custom-button' onclick='extraNetworksSearchButton(event)'>{html.escape(subdir)}</button><br>" for subdir in subdirs if subdir != ''])
         self.html = ''
+        _timer.record('subdirs')
         self.create_items(tabname)
+        _timer.record('create_items')
         self.create_xyz_grid()
+        _timer.record('xyz_grid')
         htmls = []
         for item in self.items:
             htmls.append(self.create_html(item, tabname))
         self.html += ''.join(htmls)
         self.page_time = time.time()
+        _timer.record('item_html')
         if len(subdirs_html) > 0 or len(self.html) > 0:
             self.html = f"<div id='{tabname}_{self_name_id}_subdirs' class='extra-network-subdirs'>{subdirs_html}</div><div id='{tabname}_{self_name_id}_cards' class='extra-network-cards'>{self.html}</div>"
         else:
             return ''
-        shared.log.debug(f"Extra networks: page='{self.name}' items={len(self.items)} subdirs={len(subdirs)} tab={tabname} dirs={self.allowed_directories_for_previews()} time={self.list_time}s")
+        shared.log.debug(f"Extra networks: page='{self.name}' items={len(self.items)} subdirs={len(subdirs)} tab={tabname} dirs={allowed_folders} time={self.list_time}s summary={_timer.summary()}")
         if len(self.missing_thumbs) > 0:
             threading.Thread(target=self.create_thumb).start()
         return self.html
@@ -292,24 +308,21 @@ class ExtraNetworksPage:
             return ""
 
     def find_preview_file(self, path):
-        fn = os.path.splitext(path)[0]
-        preview_extensions = ["jpg", "jpeg", "png", "webp", "tiff", "jp2"]
-        for file in [f'{fn}{mid}{ext}' for ext in preview_extensions for mid in ['.thumb.', '.preview.', '.']]:
-            if os.path.exists(file):
-                return file
-        return 'html/card-no-preview.png'
+        if path:
+            fn = os.path.splitext(path)[0]
+            preview_extensions=["jpg", "jpeg", "png", "webp", "tiff", "jp2"]
+            images=modelloader.list_files(os.path.dirname(path), ext_filter=preview_extensions, recursive=False )
+            for file in [f'{fn}{mid}{ext}' for ext in preview_extensions for mid in ['.thumb.', '.preview.', '.']]:
+                if file in images:
+                    return file
+        return self.missing_preview_file
 
     def find_preview(self, path):
-        if path is None:
-            return self.link_preview('html/card-no-preview.png')
-        fn = os.path.splitext(path)[0]
-        preview_extensions = ["jpg", "jpeg", "png", "webp", "tiff", "jp2"]
-        for file in [f'{fn}{mid}{ext}' for ext in preview_extensions for mid in ['.thumb.', '.', '.preview.']]:
-            if os.path.exists(file):
-                if '.thumb.' not in file:
-                    self.missing_thumbs.append(file)
-                return self.link_preview(file)
-        return self.link_preview('html/card-no-preview.png')
+        preview=self.find_preview_file(path)
+        if preview != self.missing_preview_file:
+            if '.thumb.' not in preview:
+                self.missing_thumbs.append(preview)
+        return self.link_preview(preview)
 
     def find_description(self, path):
         class HTMLFilter(HTMLParser):
@@ -401,7 +414,7 @@ class ExtraNetworksUi:
 
 
 def create_ui(container, button_parent, tabname, skip_indexing = False):
-    debug(f'EN create-ui: {tabname}')
+    debug(f'create-ui: {tabname}')
     ui = ExtraNetworksUi()
     ui.tabname = tabname
     ui.pages = []

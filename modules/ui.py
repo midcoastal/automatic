@@ -13,7 +13,7 @@ from modules.call_queue import wrap_gradio_gpu_call, wrap_queued_call, wrap_grad
 from modules import sd_hijack, sd_models, script_callbacks, ui_extensions, deepbooru, extra_networks, ui_common, ui_postprocessing, ui_loadsave, ui_train, ui_models
 from modules.ui_components import FormRow, FormGroup, ToolButton, FormHTML
 from modules.paths import script_path, data_path
-from modules.shared import opts, cmd_opts
+from modules.shared import opts, cmd_opts, log
 from modules.dml import directml_override_opts
 from modules import prompt_parser
 from modules import timer
@@ -29,6 +29,7 @@ import modules.theme
 import modules.textual_inversion.ui
 import modules.sd_samplers
 
+debug = log.env('SD_UI_DEBUG').prefix(__name__)
 
 modules.errors.install()
 mimetypes.init()
@@ -233,6 +234,7 @@ def update_token_counter(text, steps):
 
 def create_toprow(is_img2img):
     id_part = "img2img" if is_img2img else "txt2img"
+    debug('create_toprow - id_part')
     with gr.Row(elem_id=f"{id_part}_toprow", variant="compact"):
         with gr.Column(elem_id=f"{id_part}_prompt_container", scale=6):
             with gr.Row():
@@ -372,6 +374,7 @@ def create_override_settings_dropdown(tabname, row): # pylint: disable=unused-ar
 
 
 def create_ui(startup_timer = None):
+    debug('create_ui')
     if startup_timer is None:
         timer.startup = timer.Timer()
     reload_javascript()

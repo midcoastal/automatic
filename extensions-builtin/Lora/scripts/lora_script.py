@@ -78,3 +78,5 @@ def infotext_pasted(infotext, d): # pylint: disable=unused-argument
 
 
 script_callbacks.on_infotext_pasted(infotext_pasted)
+
+script_callbacks.on_before_ui(networks.list_available_networks)

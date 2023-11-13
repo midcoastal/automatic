@@ -8,6 +8,7 @@ from modules import shared, ui_extra_networks
 class ExtraNetworksPageLora(ui_extra_networks.ExtraNetworksPage):
     def __init__(self):
         super().__init__('Lora')
+        self.empty_search_extensions=['.ckpt', '.safetensors', '.pt']
 
     def refresh(self):
         networks.list_available_networks()

@@ -411,7 +411,7 @@ def directory_mtime(dir:str, *, recursive:Union[bool,Callable]=True) -> float: #
 
 def directories_file_paths(directories:dict) -> list[str]:
     return sum([dat[1] for dat in directories.values()],[])
-    
+
 
 def unique_directories(directories:list[str], *, recursive:Union[bool,Callable]=True) -> list[str]:
     '''Ensure no empty, or duplicates'''
@@ -454,7 +454,7 @@ def real_path(path:str) -> Union[str, None]:
     return None
 
 def unique_paths(paths:list[str]) -> list[str]:
-    return { rp: True for rp in [real_path(fp) for fp in paths if fp] if rp }.keys()
+    return [ k for k in { real_path(fp): True for fp in paths if fp }.keys() if k ]
 
 
 def directory_files(*directories:list[str], recursive:Union[bool,Callable]=True) -> list[str]:

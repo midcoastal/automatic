@@ -15,8 +15,8 @@ import torch
 import diffusers.models.lora
 from modules import shared, devices, sd_models, errors, scripts, sd_hijack
 
+debug = shared.log.env('SD_LORA_DEBUG').prefix(f'[{__name__}]')
 
-debug = os.environ.get('SD_LORA_DEBUG', None)
 originals: lora_patches.LoraPatches = None
 extra_network_lora = None
 available_networks = {}
@@ -75,8 +75,7 @@ def assign_network_names_to_compvis_modules(sd_model):
 def load_network(name, network_on_disk):
     t0 = time.time()
     cached = lora_cache.get(name, None)
-    if debug:
-        shared.log.debug(f'LoRA load: name={name} file={network_on_disk.filename} {"cached" if cached else ""}')
+    debug(f'LoRA load: name={name} file={network_on_disk.filename} {"cached" if cached else ""}')
     if cached is not None:
         return cached
     net = network.Network(name, network_on_disk)
@@ -106,8 +105,7 @@ def load_network(name, network_on_disk):
         net.modules[key] = net_module
     if keys_failed_to_match:
         shared.log.warning(f"LoRA unmatched keys: file={network_on_disk.filename} keys={len(keys_failed_to_match)}")
-        if debug:
-            shared.log.debug(f"LoRA unmatched keys: file={network_on_disk.filename} keys={keys_failed_to_match}")
+        debug(f"LoRA unmatched keys: file={network_on_disk.filename} keys={keys_failed_to_match}")
     lora_cache[name] = net
     t1 = time.time()
     timer['load'] += t1 - t0
@@ -143,8 +141,8 @@ def load_networks(names, te_multipliers=None, unet_multipliers=None, dyn_dims=No
                 net = load_network(name, network_on_disk)
             except Exception as e:
                 shared.log.error(f"LoRA load failed: file={network_on_disk.filename}")
-                if debug:
-                    errors.display(e, f"LoRA load failed file={network_on_disk.filename}")
+                #if debug:
+                #    errors.display(e, f"LoRA load failed file={network_on_disk.filename}")
                 continue
             net.mentioned_name = name
             network_on_disk.read_hash()
@@ -162,8 +160,8 @@ def load_networks(names, te_multipliers=None, unet_multipliers=None, dyn_dims=No
     while len(lora_cache) > shared.opts.lora_in_memory_limit:
         name = next(iter(lora_cache))
         lora_cache.pop(name, None)
-    if len(loaded_networks) > 0 and debug:
-        shared.log.debug(f'LoRA loaded={len(loaded_networks)} cache={list(lora_cache)}')
+    if len(loaded_networks) > 0:
+        debug(f'LoRA loaded={len(loaded_networks)} cache={list(lora_cache)}')
     devices.torch_gc()
 
     if recompile_model:
@@ -248,8 +246,7 @@ def network_apply_weights(self: Union[torch.nn.Conv2d, torch.nn.Linear, torch.nn
                             else:
                                 self.bias += ex_bias
                 except RuntimeError as e:
-                    if debug:
-                        shared.log.debug(f"LoRA apply weight network={net.name} layer={network_layer_name} {e}")
+                    debug(f"LoRA apply weight network={net.name} layer={network_layer_name} {e}")
                     extra_network_lora.errors[net.name] = extra_network_lora.errors.get(net.name, 0) + 1
                 continue
             module_q = net.modules.get(network_layer_name + "_q_proj", None)
@@ -272,8 +269,7 @@ def network_apply_weights(self: Union[torch.nn.Conv2d, torch.nn.Linear, torch.nn
                         else:
                             self.out_proj.bias += ex_bias
                 except RuntimeError as e:
-                    if debug:
-                        shared.log.debug(f"LoRA network={net.name} layer={network_layer_name} {e}")
+                    debug(f"LoRA network={net.name} layer={network_layer_name} {e}")
                     extra_network_lora.errors[net.name] = extra_network_lora.errors.get(net.name, 0) + 1
                 continue
             if module is None:
@@ -369,22 +365,30 @@ def network_MultiheadAttention_load_state_dict(self, *args, **kwargs):
 
 
 def list_available_networks():
+    list_debug = debug.prefix('list_available_networks ')
+    list_debug('start')
+    os.makedirs(shared.cmd_opts.lora_dir, exist_ok=True)
+    dirs = []
+    candidates = []
+    if os.path.exists(shared.cmd_opts.lora_dir):
+        dirs.append(shared.cmd_opts.lora_dir)
+        #candidates += list(shared.walk_files(shared.cmd_opts.lora_dir, allowed_extensions=[".pt", ".ckpt", ".safetensors"]))
+    else:
+        shared.log.warning('LoRA directory not found: path="{shared.cmd_opts.lora_dir}"')
+    if os.path.exists(shared.cmd_opts.lyco_dir):
+        dirs.append(shared.cmd_opts.lyco_dir)
+        #candidates += list(shared.walk_files(shared.cmd_opts.lyco_dir, allowed_extensions=[".pt", ".ckpt", ".safetensors"]))
+    from modules.modelloader import list_files
+    list_debug(f'paths: {dirs}')
     available_networks.clear()
     available_network_aliases.clear()
     forbidden_network_aliases.clear()
     available_network_hash_lookup.clear()
     forbidden_network_aliases.update({"none": 1, "Addams": 1})
-    os.makedirs(shared.cmd_opts.lora_dir, exist_ok=True)
-    candidates = []
-    if os.path.exists(shared.cmd_opts.lora_dir):
-        candidates += list(shared.walk_files(shared.cmd_opts.lora_dir, allowed_extensions=[".pt", ".ckpt", ".safetensors"]))
-    else:
-        shared.log.warning('LoRA directory not found: path="{shared.cmd_opts.lora_dir}"')
-    if os.path.exists(shared.cmd_opts.lyco_dir):
-        candidates += list(shared.walk_files(shared.cmd_opts.lyco_dir, allowed_extensions=[".pt", ".ckpt", ".safetensors"]))
+    candidates = list_files(*dirs, ext_filter=[".pt", ".ckpt", ".safetensors"])
+    list_debug(f'candidates: {len(candidates)}')
     for filename in candidates:
-        if os.path.isdir(filename):
-            continue
+        list_debug(f'load_candidate: {filename}')
         name = os.path.splitext(os.path.basename(filename))[0]
         try:
             entry = network.NetworkOnDisk(name, filename)
@@ -418,6 +422,3 @@ def infotext_pasted(infotext, params): # pylint: disable=W0613
         added.append(f"<lora:{name}:{multiplier}>")
     if added:
         params["Prompt"] += "\n" + "".join(added)
-
-
-list_available_networks()

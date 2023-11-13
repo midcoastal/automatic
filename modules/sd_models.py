@@ -26,6 +26,8 @@ from modules.timer import Timer
 from modules.memstats import memory_stats
 from modules.paths_internal import models_path, script_path
 
+debug = shared.log.env('SD_MODELS_DEBUG').prefix(f'[{__name__}]')
+
 try:
     import diffusers
 except Exception as ex:
@@ -152,18 +154,23 @@ def checkpoint_tiles(use_short=False): # pylint: disable=unused-argument
 
 
 def list_models():
+    list_debug = debug.prefix('list_models ')
+    list_debug('start')
     t0 = time.time()
     global checkpoints_list # pylint: disable=global-statement
-    checkpoints_list.clear()
-    checkpoint_aliases.clear()
     if shared.opts.sd_disable_ckpt or shared.backend == shared.Backend.DIFFUSERS:
         ext_filter = [".safetensors"]
     else:
         ext_filter = [".ckpt", ".safetensors"]
+    checkpoints_list.clear()
+    checkpoint_aliases.clear()
+    list_debug('load models')
     model_list = modelloader.load_models(model_path=model_path, model_url=None, command_path=shared.opts.ckpt_dir, ext_filter=ext_filter, download_name=None, ext_blacklist=[".vae.ckpt", ".vae.safetensors"])
     if shared.backend == shared.Backend.DIFFUSERS:
+        list_debug('load diffusers')
         model_list += modelloader.load_diffusers_models(model_path=os.path.join(models_path, 'Diffusers'), command_path=shared.opts.diffusers_dir)
     for filename in sorted(model_list, key=str.lower):
+        list_debug(f'Checkpoint {filename}')
         checkpoint_info = CheckpointInfo(filename)
         if checkpoint_info.name is not None:
             checkpoint_info.register()
@@ -407,19 +414,19 @@ def read_state_dict(checkpoint_file, map_location=None): # pylint: disable=unuse
                 return None
             if shared.opts.stream_load:
                 if extension.lower() == ".safetensors":
-                    # shared.log.debug('Model weights loading: type=safetensors mode=buffered')
+                    debug(f'Model weights loading: file={checkpoint_file} type=safetensors mode=buffered')
                     buffer = f.read()
                     pl_sd = safetensors.torch.load(buffer)
                 else:
-                    # shared.log.debug('Model weights loading: type=checkpoint mode=buffered')
+                    debug(f'Model weights loading: file={checkpoint_file} type=checkpoint mode=buffered')
                     buffer = io.BytesIO(f.read())
                     pl_sd = torch.load(buffer, map_location='cpu')
             else:
                 if extension.lower() == ".safetensors":
-                    # shared.log.debug('Model weights loading: type=safetensors mode=mmap')
+                    debug(f'Model weights loading: file={checkpoint_file} type=safetensors mode=mmap')
                     pl_sd = safetensors.torch.load_file(checkpoint_file, device='cpu')
                 else:
-                    # shared.log.debug('Model weights loading: type=checkpoint mode=direct')
+                    debug(f'Model weights loading: file={checkpoint_file} type=checkpoint mode=direct')
                     pl_sd = torch.load(f, map_location='cpu')
             sd = get_state_dict_from_checkpoint(pl_sd)
         del pl_sd
