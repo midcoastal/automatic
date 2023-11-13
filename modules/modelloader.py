@@ -2,24 +2,24 @@ import os
 import time
 import shutil
 import importlib
-from typing import Dict
+from typing import Dict, List, Union, Callable
 from urllib.parse import urlparse
 import PIL.Image as Image
 import rich.progress as p
-from modules import shared
+from modules import shared, errors
 from modules.upscaler import Upscaler, UpscalerLanczos, UpscalerNearest, UpscalerNone
 from modules.paths import script_path, models_path
 
 diffuser_repos = []
 
-def walk(top, onerror:callable=None):
+def walk(top, onerror:Callable=None, *, recurse:Union[bool,Callable]=True):
     # A near-exact copy of `os.path.walk()`, trimmed slightly. Probably not nessesary for most people's collections, but makes a difference on really large datasets.
     nondirs = []
     walk_dirs = []
     try:
         scandir_it = os.scandir(top)
     except OSError as error:
-        if onerror is not None:
+        if callable(onerror):
             onerror(error, top)
         return
     with scandir_it:
@@ -30,7 +30,7 @@ def walk(top, onerror:callable=None):
                 except StopIteration:
                     break
             except OSError as error:
-                if onerror is not None:
+                if callable(onerror):
                     onerror(error, top)
                 return
             try:
@@ -45,15 +45,18 @@ def walk(top, onerror:callable=None):
                         raise NotADirectoryError('Broken Symlink')
                     walk_dirs.append(entry.path)
                 except OSError as error:
-                    if onerror is not None:
+                    if callable(onerror):
                         onerror(error, entry.path)
-    # Recurse into sub-directories
-    for new_path in walk_dirs:
-        if os.path.basename(new_path).startswith('models--'):
-            continue
-        yield from walk(new_path, onerror)
+    if recurse:
+        # Recurse into sub-directories
+        for new_path in walk_dirs:
+            if os.path.basename(new_path).startswith('models--'):
+                continue
+            if callable(recurse) and not recurse(new_path):
+                continue
+            yield from walk(new_path, onerror, recurse=recurse)
     # Yield after recursion if going bottom up
-    yield top, nondirs
+    yield top, nondirs, walk_dirs
 
 
 def download_civit_meta(model_path: str, model_id):
@@ -315,73 +318,147 @@ modelloader_directories = {}
 cache_last = 0
 cache_time = 1
 
+def _clean_directory(dir:str, *, recursive:Union[bool,Callable]=True):
+    is_dirty = True
+    if dir in modelloader_directories:
+        if not is_directory(dir):
+            is_dirty = True
+            _delete_directory()
+        else:
+            is_dirty = os.path.getmtime(dir) != modelloader_directories[dir][0]
+            for _dir in modelloader_directories[dir][2].copy():
+                if not is_directory(dir):
+                    is_dirty = True
+                    _delete_directory(_dir)
+                    if _dir in modelloader_directories[dir][2]:
+                        modelloader_directories[dir][2].remove(_dir)
+                elif recursive and (not callable(recursive) or recursive(_dir)):
+                    is_dirty = _clean_directory(_dir) or is_dirty
+    return is_dirty
 
-def directory_has_changed(dir:str, *, recursive:bool=True) -> bool: # pylint: disable=redefined-builtin
+
+def _delete_directory(dir:str):
+    global modelloader_directories
+    if dir in modelloader_directories:
+        for _dir in modelloader_directories[dir][2]:
+            _delete_directory(_dir)
+        del modelloader_directories[dir]
+
+def is_directory(dir):
+    return dir and os.path.exists(dir) and os.path.isdir(dir)
+
+def directory_has_changed(dir:str, *, recursive:Union[bool,Callable]=True) -> bool: # pylint: disable=redefined-builtin
     try:
-        dir = os.path.abspath(dir)
+        dir = real_path(dir)
+        if not is_directory(dir):
+            return True
+        global modelloader_directories
         if dir not in modelloader_directories:
             return True
-        if cache_last > (time.time() - cache_time):
-            return False
-        if not (os.path.exists(dir) and os.path.isdir(dir) and os.path.getmtime(dir) == modelloader_directories[dir][0]):
+        if os.path.getmtime(dir) != modelloader_directories[dir][0]:
             return True
         if recursive:
-            for _dir in modelloader_directories:
-                if _dir.startswith(dir) and _dir != dir and not (os.path.exists(_dir) and os.path.isdir(_dir) and os.path.getmtime(_dir) == modelloader_directories[_dir][0]):
-                    return True
+            return any([directory_has_changed(child, recursive=recursive) for child in modelloader_directories[dir][2] if (not callable(recursive) or recursive(child))])
     except Exception as e:
         shared.log.error(f"Filesystem Error: {e.__class__.__name__}({e})")
         return True
     return False
 
-
-def directory_directories(dir:str, *, recursive:bool=True) -> dict[str,tuple[float,list[str]]]: # pylint: disable=redefined-builtin
-    dir = os.path.abspath(dir)
-    if directory_has_changed(dir, recursive=recursive):
-        for _dir in list(modelloader_directories):
-            if os.path.exists(_dir) or os.path.isdir(_dir):
-                continue
-            del modelloader_directories[_dir]
-        for _dir, _files in walk(dir, lambda e, path: shared.log.debug(f"FS walk error: {e} {path}")):
-            try:
-                mtime = os.path.getmtime(_dir)
-                if _dir not in modelloader_directories or mtime != modelloader_directories[_dir][0]:
-                    modelloader_directories[_dir] = (mtime, [os.path.join(_dir, fn) for fn in _files])
-            except Exception as e:
-                shared.log.error(f"Filesystem Error: {e.__class__.__name__}({e})")
-                del modelloader_directories[_dir]
+def refresh_directory(dir:str, *, recursive:Union[bool,Callable]=True) -> dict[str,tuple[float,list[str]]]: # pylint: disable=redefined-builtin
+    global modelloader_directories
     res = {}
-    for _dir in modelloader_directories:
-        if _dir == dir or (recursive and _dir.startswith(dir)):
-            res[_dir] = modelloader_directories[_dir]
-            if not recursive:
-                break
+    t0 = time.time()
+    #shared.log.debug(f'reloading dir: {dir}')
+    for _dir, _files, _dirs in walk(dir, lambda e, path: shared.log.debug(f"FS walk error: {e} {path}"), recurse=recursive):
+        try:
+            if _dir in modelloader_directories:
+                for dead in modelloader_directories[_dir][2]:
+                    if dead not in _dirs:
+                        _delete_directory(dead)
+            res[_dir] = modelloader_directories[_dir] = (os.path.getmtime(_dir), [os.path.join(_dir, fn) for fn in _files], _dirs)
+        except Exception as e:
+            shared.log.error(f"Filesystem Error: {e.__class__.__name__}({e})")
+            del modelloader_directories[_dir]
+    #shared.log.debug(f'reloading dir took {time.time()-t0}s: {dir}')
+    return res
+
+def directory_directories(dir:str, *, recursive:Union[bool,Callable]=True) -> dict[str,tuple[float,list[str]]]: # pylint: disable=redefined-builtin
+    res = {}
+    dir = real_path(dir)
+    if not is_directory(dir):
+        _delete_directory(dir)
+    else:
+        global modelloader_directories
+        if dir not in modelloader_directories or _clean_directory(dir, recursive=False):
+            res = refresh_directory(dir, recursive=recursive)
+        elif dir in modelloader_directories:
+            res[dir] = modelloader_directories[dir]
+            if recursive:
+                for _dir in list(modelloader_directories[dir][2]).copy():
+                    try:
+                        if not os.path.isdir(_dir):
+                            _delete_directory(_dir)
+                        elif _dir in modelloader_directories and (not callable(recursive) or recursive(_dir)):
+                            res.update(directory_directories(_dir, recursive=recursive))
+                    except Exception:
+                        _delete_directory(_dir)
     return res
 
 
-def directory_mtime(dir:str, *, recursive:bool=True) -> float: # pylint: disable=redefined-builtin
-    return float(max(0, *[mtime for mtime, _ in directory_directories(dir, recursive=recursive).values()]))
+def directory_mtime(dir:str, *, recursive:Union[bool,Callable]=True) -> float: # pylint: disable=redefined-builtin
+    return float(max(0, *[dat[0] for dat in directory_directories(dir, recursive=recursive).values()]))
 
 
 def directories_file_paths(directories:dict) -> list[str]:
     return sum([dat[1] for dat in directories.values()],[])
+    
 
-
-def unique_directories(directories:list[str], *, recursive:bool=True) -> list[str]:
+def unique_directories(directories:list[str], *, recursive:Union[bool,Callable]=True) -> list[str]:
     '''Ensure no empty, or duplicates'''
-    directories = { os.path.abspath(dir): True for dir in directories if dir }.keys()
-    if recursive:
-        '''If we are going recursive, then directories that are children of other directories are redundant'''
-        directories = [dir for dir in directories if not any(_dir != dir and dir.startswith(os.path.join(_dir,'')) for _dir in directories)]
+    '''If we are going recursive, then directories that are children of other directories are redundant'''
+    directories = [ dir for dir in unique_paths(directories) if os.path.isdir(dir) ]
+    if len(directories) > 1 and recursive:
+        _directories = sorted([ dir for dir in directories], key=len, reverse=True)
+        while _directories:
+            dir = _directories.pop()
+            _dir = os.path.join(dir, '')
+            for child_dir in _directories:
+                if not child_dir.startswith(_dir):
+                    continue
+                remove = bool(recursive)
+                if remove and callable(recursive):
+                    _child_dir = child_dir[len(_dir):]
+                    if _child_dir:
+                        _next_dir = dir
+                        for sub_dir in _child_dir.split(_dir[:1]):
+                            _next_dir = os.path.join(_child_dir, sub_dir)
+                            try:
+                                if recursive(_next_dir):
+                                    continue
+                            except Exception:
+                                pass
+                            remove = False
+                            break
+                if remove:
+                    if child_dir in directories:
+                        directories.remove(child_dir)
+                    if child_dir in _directories:
+                        _directories.remove(child_dir)
     return directories
 
+def real_path(path:str) -> Union[str, None]:
+    try:
+        return os.path.abspath(os.path.expanduser(path))
+    except Exception:
+        pass
+    return None
 
 def unique_paths(paths:list[str]) -> list[str]:
-    return { fp: True for fp in paths }.keys()
+    return { rp: True for rp in [real_path(fp) for fp in paths if fp] if rp }.keys()
 
 
-def directory_files(*directories:list[str], recursive:bool=True) -> list[str]:
-    return unique_paths(sum([[*directories_file_paths(directory_directories(dir, recursive=recursive))] for dir in unique_directories(directories, recursive=recursive)],[]))
+def directory_files(*directories:list[str], recursive:Union[bool,Callable]=True) -> list[str]:
+    return sum([[*directories_file_paths(directory_directories(dir, recursive=recursive))] for dir in unique_directories(directories, recursive=recursive)],[])
 
 
 def extension_filter(ext_filter=None, ext_blacklist=None):
@@ -451,6 +528,8 @@ def load_file_from_url(url: str, *, model_dir: str, progress: bool = True, file_
         download_url_to_file(url, cached_file)
     return cached_file
 
+def list_files(*paths: List[str], ext_filter=None, ext_blacklist=None, recursive:Union[bool,Callable]=True) -> list:
+    return [*filter(extension_filter(ext_filter, ext_blacklist), directory_files(*paths,recursive=recursive))]
 
 def load_models(model_path: str, model_url: str = None, command_path: str = None, ext_filter=None, download_name=None, ext_blacklist=None) -> list:
     """
@@ -465,7 +544,7 @@ def load_models(model_path: str, model_url: str = None, command_path: str = None
     places = unique_directories([model_path, command_path])
     output = []
     try:
-        output:list = [*filter(extension_filter(ext_filter, ext_blacklist), directory_files(*places))]
+        output:list = list_files(*places, ext_filter=ext_filter, ext_blacklist=ext_blacklist)
         if model_url is not None and len(output) == 0:
             if download_name is not None:
                 dl = load_file_from_url(model_url, model_dir=places[0], progress=True, file_name=download_name)
@@ -473,7 +552,7 @@ def load_models(model_path: str, model_url: str = None, command_path: str = None
             else:
                 output.append(model_url)
     except Exception as e:
-        shared.log.error(f"Error listing models: {places} {e}")
+        errors.display(e,f"Error listing models: {places}")
     return output
 
 
