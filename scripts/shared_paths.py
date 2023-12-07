@@ -24,15 +24,18 @@ WILDCARD_PATH = FILE_DIR.joinpath("scripts/wildcards")
 EMB_PATH = Path(shared.cmd_opts.embeddings_dir)
 HYP_PATH = Path(shared.cmd_opts.hypernetwork_dir)
 
+LORA_PATH = None
 try:
     LORA_PATH = Path(shared.cmd_opts.lora_dir)
 except AttributeError:
-    LORA_PATH = None
+    pass
 
+LYCO_PATH = None
 try:
+    LYCO_PATH = Path(shared.cmd_opts.lyco_dir) # attempt original non-backcompat path
     LYCO_PATH = Path(shared.cmd_opts.lyco_dir_backcompat)
 except AttributeError:
-    LYCO_PATH = None
+    pass
 
 
 def find_ext_wildcard_paths():
