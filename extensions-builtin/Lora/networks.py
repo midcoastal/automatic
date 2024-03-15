@@ -440,6 +440,7 @@ def network_MultiheadAttention_load_state_dict(self, *args, **kwargs):
 
 
 def list_available_networks():
+    t0 = time.time()
     available_networks.clear()
     available_network_aliases.clear()
     forbidden_network_aliases.clear()
@@ -471,11 +472,16 @@ def list_available_networks():
         except OSError as e:  # should catch FileNotFoundError and PermissionError etc.
             shared.log.error(f"Failed to load network {name} from {filename} {e}")
 
-    candidates = list(files_cache.list_files(*directories, ext_filter=[".pt", ".ckpt", ".safetensors"]))
     with concurrent.futures.ThreadPoolExecutor(max_workers=shared.max_workers) as executor:
-        for fn in candidates:
+        for fn in files_cache.list_files(*directories, ext_filter=[".pt", ".ckpt", ".safetensors"]):
+            '''
+            By using the generator returned by `files_cache.list_files()` we
+            allow the concurrent workers to do their thing, regardless of any
+            blocking I/O calls when itterating the filesystem.
+            This reduces load-time for large sets by ~1/4.
+            '''
             executor.submit(add_network, fn)
-    shared.log.info(f'LoRA networks: available={len(available_networks)} folders={len(forbidden_network_aliases)}')
+    shared.log.info(f'LoRA networks: time={time.time()-t0:.2f} available={len(available_networks)} forbidden_aliases={len(forbidden_network_aliases)}')
 
 
 def infotext_pasted(infotext, params): # pylint: disable=W0613

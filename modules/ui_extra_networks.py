@@ -213,8 +213,7 @@ class ExtraNetworksPage:
         if skip:
             return f"<div id='{tabname}_{self_name_id}_subdirs' class='extra-network-subdirs'></div><div id='{tabname}_{self_name_id}_cards' class='extra-network-cards'>Extra network page not ready<br>Click refresh to try again</div>"
         subdirs = {}
-        allowed_folders = [os.path.abspath(x) for x in self.allowed_directories_for_previews() if os.path.exists(x)]
-        for parentdir, dirs in {d: files_cache.walk(d, cached=True, recurse=files_cache.not_hidden) for d in allowed_folders}.items():
+        for parentdir, dirs in {d: files_cache.cached_walk(d, recurse=files_cache.not_hidden) for d in self.allowed_directories_for_previews()}.items():
             for tgt in dirs:
                 tgt = tgt.path
                 if os.path.join(paths.models_path, 'Reference') in tgt:
