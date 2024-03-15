@@ -35,7 +35,7 @@ card_full = '''
             <span class='details' title="Get details" onclick="showCardDetails(event)">&#x1f6c8;</span>
             <div class='additional'><ul></ul></div>
         </div>
-        <img class='preview' src='{preview}' style='width: {width}px; height: {height}px; object-fit: {fit}' loading='lazy'></img>
+        <img class='preview' src='{preview}' loading='lazy'></img>
     </div>
 '''
 card_list = '''
@@ -45,6 +45,21 @@ card_list = '''
             <div class='name'>{title}</div>&nbsp;
             <div class='tags tags-list'></div>
         </div>
+    </div>
+'''
+html_format = '''
+    <style>
+        #{page_name}_cards .preview {{
+            width: {width}px;
+            height: {height}px;
+            object-fit: {fit};
+        }}
+    </style>
+    <div id='{page_name}_subdirs' class='extra-network-subdirs'>
+        {subdirs_html}
+    </div>
+    <div id='{page_name}_cards' class='extra-network-cards'>
+        {cards_html}
     </div>
 '''
 
@@ -240,18 +255,20 @@ class ExtraNetworksPage:
         if self.name == 'style' and shared.opts.extra_networks_styles:
             subdirs['built-in'] = 1
         subdirs_html = "<button class='lg secondary gradio-button custom-button search-all' onclick='extraNetworksSearchButton(event)'>All</button><br>"
-        subdirs_html += "".join([f"<button class='lg secondary gradio-button custom-button' onclick='extraNetworksSearchButton(event)'>{html.escape(subdir)}</button><br>" for subdir in subdirs if subdir != ''])
-        self.html = ''
+        subdirs_html += "".join(f"<button class='lg secondary gradio-button custom-button' onclick='extraNetworksSearchButton(event)'>{html.escape(subdir)}</button><br>" for subdir in subdirs if subdir != '')
         self.create_items(tabname)
         self.create_xyz_grid()
-        htmls = []
         if len(self.items) > 0 and self.items[0].get('mtime', None) is not None:
             self.items.sort(key=lambda x: x["mtime"], reverse=True)
-        for item in self.items:
-            htmls.append(self.create_html(item, tabname))
-        self.html += ''.join(htmls)
+        self.html = html_format.format(
+            page_name=f'{tabname}_{self_name_id}',
+            width=shared.opts.extra_networks_card_size,
+            height=shared.opts.extra_networks_card_size if shared.opts.extra_networks_card_square else 'auto',
+            fit=shared.opts.extra_networks_card_fit,
+            subdirs_html=subdirs_html,
+            cards_html=''.join(str(self.create_html(item, tabname)) for item in self.items)
+        )
         self.page_time = time.time()
-        self.html = f"<div id='{tabname}_{self_name_id}_subdirs' class='extra-network-subdirs'>{subdirs_html}</div><div id='{tabname}_{self_name_id}_cards' class='extra-network-cards'>{self.html}</div>"
         shared.log.debug(f"Extra networks: page='{self.name}' items={len(self.items)} subfolders={len(subdirs)} tab={tabname} folders={self.allowed_directories_for_previews()} list={self.list_time:.2f} thumb={self.preview_time:.2f} desc={self.desc_time:.2f} info={self.info_time:.2f} workers={shared.max_workers}")
         if len(self.missing_thumbs) > 0:
             threading.Thread(target=self.create_thumb).start()
@@ -272,10 +289,7 @@ class ExtraNetworksPage:
                 "title": os.path.basename(item["name"].replace('_', ' ')),
                 "filename": item["filename"],
                 "tags": '|'.join([item.get("tags")] if isinstance(item.get("tags", {}), str) else list(item.get("tags", {}).keys())),
-                "preview": html.escape(item.get("preview", self.link_preview('html/card-no-preview.png'))),
-                "width": shared.opts.extra_networks_card_size,
-                "height": shared.opts.extra_networks_card_size if shared.opts.extra_networks_card_square else 'auto',
-                "fit": shared.opts.extra_networks_card_fit,
+                "preview": html.escape(str(item.get("preview", self.link_preview('html/card-no-preview.png')))),
                 "prompt": item.get("prompt", None),
                 "search": item.get("search_term", ""),
                 "description": item.get("description") or "",
