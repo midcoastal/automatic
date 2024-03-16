@@ -24,13 +24,12 @@ class ExtraNetworksPageCheckpoints(ui_extra_networks.ExtraNetworksPage):
                 url = v['path']
             name = os.path.join(reference_dir, k)
             preview = v.get('preview', v['path'])
+            ui_extra_networks.debug(f'ExtraNetworksPageCheckpoints.list_reference(): name={name} preview={preview} url={url}')
             yield {
                 "type": 'Model',
                 "name": name,
                 "title": name,
                 "filename": url,
-                "preview": self.find_preview(os.path.join(reference_dir, preview)),
-                "local_preview": self.find_preview_file(os.path.join(reference_dir, preview)),
                 "onclick": '"' + html.escape(f"""return selectReference({json.dumps(url)})""") + '"',
                 "hash": None,
                 "mtime": 0,
