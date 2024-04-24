@@ -683,7 +683,7 @@ def set_diffuser_options(sd_model, vae = None, op: str = 'model'):
                 shared.opts.diffusers_move_refiner = False
                 shared.log.warning(f'Disabling {op} "Move model to CPU" since "Model CPU offload" is enabled')
             if not hasattr(sd_model, "_all_hooks") or len(sd_model._all_hooks) == 0: # pylint: disable=protected-access
-                sd_model.enable_model_cpu_offload(device=devices.device)
+                sd_model.enable_model_cpu_offload()
             else:
                 sd_model.maybe_free_model_hooks()
             sd_model.has_accelerate = True
@@ -695,7 +695,7 @@ def set_diffuser_options(sd_model, vae = None, op: str = 'model'):
                 shared.opts.diffusers_move_unet = False
                 shared.opts.diffusers_move_refiner = False
                 shared.log.warning(f'Disabling {op} "Move model to CPU" since "Sequential CPU offload" is enabled')
-            sd_model.enable_sequential_cpu_offload(device=devices.device)
+            sd_model.enable_sequential_cpu_offload()
             sd_model.has_accelerate = True
     if hasattr(sd_model, "enable_vae_slicing"):
         if shared.cmd_opts.lowvram or shared.opts.diffusers_vae_slicing:
@@ -727,8 +727,11 @@ def set_diffuser_options(sd_model, vae = None, op: str = 'model'):
         set_diffusers_attention(sd_model, DynamicAttnProcessorSDP())
 
     if shared.opts.diffusers_fuse_projections and hasattr(sd_model, 'fuse_qkv_projections'):
-        shared.log.debug(f'Setting {op}: enable fused projections')
-        sd_model.fuse_qkv_projections()
+        try:
+            sd_model.fuse_qkv_projections()
+            shared.log.debug(f'Setting {op}: enable fused projections')
+        except Exception as e:
+            shared.log.error(f'Error enabling fused projections: {e}')
     if shared.opts.diffusers_eval:
         if hasattr(sd_model, "unet") and hasattr(sd_model.unet, "requires_grad_"):
             sd_model.unet.requires_grad_(False)

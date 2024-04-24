@@ -159,6 +159,7 @@ def process_images(p: StableDiffusionProcessing) -> Processed:
                 sd_vae.reload_vae_weights()
 
         shared.prompt_styles.apply_styles_to_extra(p)
+        shared.prompt_styles.extract_comments(p)
         if not shared.opts.cuda_compile:
             sd_models.apply_token_merging(p.sd_model, p.get_token_merging_ratio())
             sd_hijack_freeu.apply_freeu(p, shared.backend == shared.Backend.ORIGINAL)
@@ -251,10 +252,6 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
     if p.scripts is not None and isinstance(p.scripts, scripts.ScriptRunner):
         p.scripts.process(p)
 
-    if shared.backend == shared.Backend.DIFFUSERS:
-        from modules import ipadapter
-        ipadapter.apply(shared.sd_model, p)
-
     def infotext(_inxex=0): # dummy function overriden if there are iterations
         return ''
 
@@ -277,6 +274,10 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
             if shared.state.interrupted:
                 shared.log.debug(f'Process interrupted: {n+1}/{p.n_iter}')
                 break
+
+            if shared.backend == shared.Backend.DIFFUSERS:
+                from modules import ipadapter
+                ipadapter.apply(shared.sd_model, p)
             p.prompts = p.all_prompts[n * p.batch_size:(n+1) * p.batch_size]
             p.negative_prompts = p.all_negative_prompts[n * p.batch_size:(n+1) * p.batch_size]
             p.seeds = p.all_seeds[n * p.batch_size:(n+1) * p.batch_size]
@@ -322,9 +323,6 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
 
             def infotext(index): # pylint: disable=function-redefined # noqa: F811
                 return create_infotext(p, p.prompts, p.seeds, p.subseeds, index=index, all_negative_prompts=p.negative_prompts)
-
-            if hasattr(shared.sd_model, 'restore_pipeline') and shared.sd_model.restore_pipeline is not None:
-                shared.sd_model.restore_pipeline()
 
             for i, x_sample in enumerate(x_samples_ddim):
                 if hasattr(p, 'recursion'):
@@ -382,6 +380,9 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
                         output_images.append(image_mask_composite)
             del x_samples_ddim
             devices.torch_gc()
+
+        if hasattr(shared.sd_model, 'restore_pipeline') and shared.sd_model.restore_pipeline is not None:
+            shared.sd_model.restore_pipeline()
 
         t1 = time.time()
         shared.log.info(f'Processed: images={len(output_images)} time={t1 - t0:.2f} its={(p.steps * len(output_images)) / (t1 - t0):.2f} memory={memstats.memory_stats()}')

@@ -1,5 +1,6 @@
 import os
 import time
+import json
 import shutil
 import importlib
 from typing import Dict
@@ -117,6 +118,12 @@ def download_civit_model_thread(model_name, model_url, model_path, model_type, t
         try:
             with open(temp_file, 'ab') as f:
                 for data in r.iter_content(block_size):
+                    if written == 0:
+                        try: # check if response is JSON message instead of bytes
+                            shared.log.error(f'Model download: response={json.loads(data.decode("utf-8"))}')
+                            raise ValueError('response: type=json expected=bytes')
+                        except Exception: # this is good
+                            pass
                     written = written + len(data)
                     f.write(data)
                     download_pbar.update(task, description="Download", completed=written)
@@ -136,7 +143,8 @@ def download_civit_model_thread(model_name, model_url, model_path, model_type, t
             download_pbar.remove_task(task)
     if starting_pos+total_size != written:
         shared.log.warning(f'{res} written={round(written/1024/1024)}Mb incomplete download')
-    else:
+    elif os.path.exists(temp_file):
+        shared.log.debug(f'Model download complete: temp="{temp_file}" path="{model_file}"')
         os.rename(temp_file, model_file)
     shared.state.end()
     return res
@@ -399,7 +407,10 @@ def load_file_from_url(url: str, *, model_dir: str, progress: bool = True, file_
     if not os.path.exists(cached_file):
         shared.log.info(f'Downloading: url="{url}" file={cached_file}')
         download_url_to_file(url, cached_file)
-    return cached_file
+    if os.path.exists(cached_file):
+        return cached_file
+    else:
+        return None
 
 
 def load_models(model_path: str, model_url: str = None, command_path: str = None, ext_filter=None, download_name=None, ext_blacklist=None) -> list:

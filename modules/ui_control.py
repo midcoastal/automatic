@@ -23,7 +23,9 @@ debug('Trace: CONTROL')
 def return_controls(res):
     # return preview, image, video, gallery, text
     debug(f'Control received: type={type(res)} {res}')
-    if isinstance(res, str): # error response
+    if res is None: # no response
+        return [None, None, None, None, '']
+    elif isinstance(res, str): # error response
         return [None, None, None, None, res]
     elif isinstance(res, tuple): # standard response received as tuple via control_run->yield(output_images, process_image, result_txt)
         preview_image = res[1] # may be None
@@ -93,11 +95,11 @@ def create_ui(_blocks: gr.Blocks=None):
                 with gr.Accordion(open=False, label="Size", elem_id="control_size", elem_classes=["small-accordion"]):
                     with gr.Tabs():
                         with gr.Tab('Before'):
-                            resize_mode_before, resize_name_before, width_before, height_before, scale_by_before, selected_scale_tab_before = ui_sections.create_resize_inputs('control', [], scale_visible=False, mode='Fixed', accordion=False, latent=True)
+                            resize_mode_before, resize_name_before, width_before, height_before, scale_by_before, selected_scale_tab_before = ui_sections.create_resize_inputs('control', [], accordion=False, latent=True)
                         with gr.Tab('After'):
-                            resize_mode_after, resize_name_after, width_after, height_after, scale_by_after, selected_scale_tab_after = ui_sections.create_resize_inputs('control', [], scale_visible=False, mode='Fixed', accordion=False, latent=False)
+                            resize_mode_after, resize_name_after, width_after, height_after, scale_by_after, selected_scale_tab_after = ui_sections.create_resize_inputs('control', [], accordion=False, latent=False)
                         with gr.Tab('Mask'):
-                            resize_mode_mask, resize_name_mask, width_mask, height_mask, scale_by_mask, selected_scale_tab_mask = ui_sections.create_resize_inputs('control', [], scale_visible=False, mode='Fixed', accordion=False, latent=False)
+                            resize_mode_mask, resize_name_mask, width_mask, height_mask, scale_by_mask, selected_scale_tab_mask = ui_sections.create_resize_inputs('control', [], accordion=False, latent=False)
 
                 with gr.Accordion(open=False, label="Sampler", elem_id="control_sampler", elem_classes=["small-accordion"]):
                     sd_samplers.set_samplers()
