@@ -36,7 +36,7 @@ const setENState = (state) => {
   if (!state) return;
   state.tab = getENActiveTab();
   state.page = getENActivePage();
-  // log('setENState', state);
+  log('setENState', state);
   const el = gradioApp().querySelector(`#${state.tab}_extra_state  > label > textarea`);
   el.value = JSON.stringify(state);
   updateInput(el);
@@ -373,8 +373,8 @@ function setupExtraNetworksForTab(tabname) {
   const detailsImg = gradioApp().getElementById(`${tabname}_extra_details_img`);
   const detailsClose = gradioApp().getElementById(`${tabname}_extra_details_close`);
   if (detailsImg && detailsClose) {
-    detailsImg.title = 'Close details';
-    detailsImg.onclick = () => detailsClose.click();
+    //detailsImg.title = 'Close details';
+    //detailsImg.onclick = () => detailsClose.click();
   }
 
   // search and description
